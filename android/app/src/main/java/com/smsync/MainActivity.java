@@ -188,7 +188,7 @@ public class MainActivity extends AppCompatActivity {
     private long getLatestSmsTimestamp() {
         try {
             Cursor cursor = getContentResolver().query(
-                    Uri.parse("content://sms/inbox"),
+                    Uri.parse("content://sms"),
                     new String[]{"date"},
                     null,
                     null,
@@ -197,6 +197,7 @@ public class MainActivity extends AppCompatActivity {
             if (cursor != null && cursor.moveToFirst()) {
                 long timestamp = cursor.getLong(0);
                 cursor.close();
+                addLog("最新短信时间: " + timestamp);
                 return timestamp;
             }
             if (cursor != null) cursor.close();
@@ -210,10 +211,10 @@ public class MainActivity extends AppCompatActivity {
         try {
             addLog("查询短信, 时间戳: " + lastSmsTimestamp);
 
-            // 按 _id DESC 排序，查询最新的短信
+            // 查询所有短信（包括收件箱和发件箱）
             Cursor cursor = getContentResolver().query(
-                    Uri.parse("content://sms/inbox"),
-                    new String[]{"_id", "address", "body", "date", "read"},
+                    Uri.parse("content://sms"),
+                    new String[]{"_id", "address", "body", "date", "type"},
                     "date > ?",
                     new String[]{String.valueOf(lastSmsTimestamp)},
                     "_id DESC"
@@ -227,9 +228,9 @@ public class MainActivity extends AppCompatActivity {
                     String sender = cursor.getString(1);
                     String body = cursor.getString(2);
                     long date = cursor.getLong(3);
-                    int read = cursor.getInt(4);
+                    int type = cursor.getInt(4); // 1=收件箱 2=发件箱
 
-                    addLog("最新短信: id=" + id + " date=" + date + " read=" + read);
+                    addLog("最新短信: id=" + id + " date=" + date + " type=" + type);
                     addLog("发送者: " + sender);
                     addLog("内容: " + body.substring(0, Math.min(50, body.length())));
 
