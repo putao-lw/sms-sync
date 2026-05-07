@@ -75,7 +75,7 @@ public class SmsReceiver extends BroadcastReceiver {
         }
     }
 
-    private String extractCode(String message) {
+    public static String extractCode(String message) {
         // 优先匹配包含"验证码"关键词附近的数字
         String[] keywords = {"验证码", "校验码", "动态码", "确认码", "code", "Code"};
 

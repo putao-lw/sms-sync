@@ -3,6 +3,9 @@ package com.smsync;
 import android.Manifest;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.database.ContentObserver;
+import android.database.Cursor;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -39,6 +42,8 @@ public class MainActivity extends AppCompatActivity {
     private Handler mainHandler;
     private List<String> logEntries = new ArrayList<>();
     private int codeCount = 0;
+    private ContentObserver smsObserver;
+    private long lastSmsTimestamp = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -102,6 +107,7 @@ public class MainActivity extends AppCompatActivity {
         if (requestCode == SMS_PERMISSION_CODE) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 addLog("短信权限已授予");
+                startSmsObserver();
             } else {
                 addLog("错误: 需要短信权限才能自动读取验证码", true);
                 Toast.makeText(this, "请授予短信权限", Toast.LENGTH_LONG).show();
@@ -127,6 +133,73 @@ public class MainActivity extends AppCompatActivity {
             });
         });
         addLog("短信回调已设置");
+
+        // 如果已有权限，直接启动 Observer
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS)
+                == PackageManager.PERMISSION_GRANTED) {
+            startSmsObserver();
+        }
+    }
+
+    private void startSmsObserver() {
+        addLog("启动短信监听(ContentObserver)...");
+        lastSmsTimestamp = System.currentTimeMillis();
+
+        smsObserver = new ContentObserver(mainHandler) {
+            @Override
+            public void onChange(boolean selfChange, Uri uri) {
+                super.onChange(selfChange, uri);
+                addLog("短信数据库变化: " + uri);
+                readLatestSms();
+            }
+        };
+
+        getContentResolver().registerContentObserver(
+                Uri.parse("content://sms"),
+                true,
+                smsObserver
+        );
+        addLog("短信监听已启动");
+    }
+
+    private void readLatestSms() {
+        try {
+            Cursor cursor = getContentResolver().query(
+                    Uri.parse("content://sms/inbox"),
+                    new String[]{"address", "body", "date"},
+                    "date > ?",
+                    new String[]{String.valueOf(lastSmsTimestamp)},
+                    "date DESC"
+            );
+
+            if (cursor != null && cursor.moveToFirst()) {
+                String sender = cursor.getString(0);
+                String body = cursor.getString(1);
+                long date = cursor.getLong(2);
+                cursor.close();
+
+                addLog("新短信: [" + sender + "] " + body.substring(0, Math.min(30, body.length())) + "...");
+
+                // 提取验证码
+                String code = SmsReceiver.extractCode(body);
+                if (code != null) {
+                    lastSmsTimestamp = date;
+                    addLog("提取到验证码: " + code);
+
+                    // 发送到 PC
+                    if (wsClient != null && wsClient.isConnected()) {
+                        wsClient.sendCode(code, sender);
+                        addLog("验证码已同步到PC: " + code, false);
+                    } else {
+                        addLog("未连接到PC，验证码未同步", true);
+                    }
+                }
+            } else if (cursor != null) {
+                cursor.close();
+            }
+        } catch (Exception e) {
+            addLog("读取短信失败: " + e.getMessage(), true);
+        }
     }
 
     private void connect() {
@@ -220,5 +293,8 @@ public class MainActivity extends AppCompatActivity {
             wsClient.disconnect();
         }
         SmsReceiver.setCallback(null);
+        if (smsObserver != null) {
+            getContentResolver().unregisterContentObserver(smsObserver);
+        }
     }
 }
