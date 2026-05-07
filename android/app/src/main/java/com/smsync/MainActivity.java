@@ -143,7 +143,10 @@ public class MainActivity extends AppCompatActivity {
 
     private void startSmsObserver() {
         addLog("启动短信监听(ContentObserver)...");
-        lastSmsTimestamp = System.currentTimeMillis();
+
+        // 初始化时获取最新短信的时间戳
+        lastSmsTimestamp = getLatestSmsTimestamp();
+        addLog("初始时间戳: " + lastSmsTimestamp);
 
         smsObserver = new ContentObserver(mainHandler) {
             @Override
@@ -160,6 +163,27 @@ public class MainActivity extends AppCompatActivity {
                 smsObserver
         );
         addLog("短信监听已启动");
+    }
+
+    private long getLatestSmsTimestamp() {
+        try {
+            Cursor cursor = getContentResolver().query(
+                    Uri.parse("content://sms/inbox"),
+                    new String[]{"date"},
+                    null,
+                    null,
+                    "date DESC"
+            );
+            if (cursor != null && cursor.moveToFirst()) {
+                long timestamp = cursor.getLong(0);
+                cursor.close();
+                return timestamp;
+            }
+            if (cursor != null) cursor.close();
+        } catch (Exception e) {
+            addLog("获取时间戳失败: " + e.getMessage(), true);
+        }
+        return System.currentTimeMillis();
     }
 
     private void readLatestSms() {
