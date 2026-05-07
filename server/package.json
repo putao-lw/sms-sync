@@ -1,0 +1,13 @@
+{
+  "name": "sms-sync-server",
+  "version": "1.0.0",
+  "description": "SMS验证码中转服务器",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.16.0"
+  }
+}
