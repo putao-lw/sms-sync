@@ -164,41 +164,64 @@ public class MainActivity extends AppCompatActivity {
 
     private void readLatestSms() {
         try {
+            addLog("查询短信, 时间戳: " + lastSmsTimestamp);
+
+            // 先查询所有短信，不限制时间
             Cursor cursor = getContentResolver().query(
                     Uri.parse("content://sms/inbox"),
-                    new String[]{"address", "body", "date"},
-                    "date > ?",
-                    new String[]{String.valueOf(lastSmsTimestamp)},
+                    new String[]{"_id", "address", "body", "date", "read"},
+                    null,
+                    null,
                     "date DESC"
             );
 
-            if (cursor != null && cursor.moveToFirst()) {
-                String sender = cursor.getString(0);
-                String body = cursor.getString(1);
-                long date = cursor.getLong(2);
-                cursor.close();
+            if (cursor != null) {
+                addLog("查询到 " + cursor.getCount() + " 条短信");
 
-                addLog("新短信: [" + sender + "] " + body.substring(0, Math.min(30, body.length())) + "...");
+                if (cursor.moveToFirst()) {
+                    int id = cursor.getInt(0);
+                    String sender = cursor.getString(1);
+                    String body = cursor.getString(2);
+                    long date = cursor.getLong(3);
+                    int read = cursor.getInt(4);
 
-                // 提取验证码
-                String code = SmsReceiver.extractCode(body);
-                if (code != null) {
-                    lastSmsTimestamp = date;
-                    addLog("提取到验证码: " + code);
+                    addLog("最新短信: id=" + id + " date=" + date + " read=" + read);
+                    addLog("发送者: " + sender);
+                    addLog("内容: " + body.substring(0, Math.min(50, body.length())));
 
-                    // 发送到 PC
-                    if (wsClient != null && wsClient.isConnected()) {
-                        wsClient.sendCode(code, sender);
-                        addLog("验证码已同步到PC: " + code, false);
+                    // 只处理比上次时间戳新的短信
+                    if (date > lastSmsTimestamp) {
+                        addLog("是新短信，提取验证码...");
+
+                        // 提取验证码
+                        String code = SmsReceiver.extractCode(body);
+                        if (code != null) {
+                            lastSmsTimestamp = date;
+                            addLog("提取到验证码: " + code);
+
+                            // 发送到 PC
+                            if (wsClient != null && wsClient.isConnected()) {
+                                wsClient.sendCode(code, sender);
+                                addLog("验证码已同步到PC: " + code);
+                            } else {
+                                addLog("未连接到PC，验证码未同步", true);
+                            }
+                        } else {
+                            addLog("未提取到验证码");
+                        }
                     } else {
-                        addLog("未连接到PC，验证码未同步", true);
+                        addLog("不是新短信, date=" + date + " <= lastTs=" + lastSmsTimestamp);
                     }
+                } else {
+                    addLog("没有短信记录");
                 }
-            } else if (cursor != null) {
                 cursor.close();
+            } else {
+                addLog("查询失败，cursor 为 null");
             }
         } catch (Exception e) {
             addLog("读取短信失败: " + e.getMessage(), true);
+            e.printStackTrace();
         }
     }
 
