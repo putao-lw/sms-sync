@@ -319,6 +319,16 @@
       if (text && text.length < 30) return text;
     }
 
+    // 北森/Phoenix 特殊处理
+    const phoenixItem = input.closest('.phoenix-form-item, .ant-form-item, [class*="form-item"]');
+    if (phoenixItem) {
+      const labelEl = phoenixItem.querySelector('.phoenix-form-item__label, .ant-form-item-label, label');
+      if (labelEl) {
+        const text = labelEl.textContent.trim().replace(/[:：]/g, '');
+        if (text && text.length < 20) return text;
+      }
+    }
+
     // 查找最近的包含"标签"的父元素
     let parent = input.parentElement;
     for (let i = 0; i < 5; i++) {

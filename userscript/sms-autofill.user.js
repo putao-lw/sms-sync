@@ -327,7 +327,17 @@
       log(`已输入手机号: ${CONFIG.PHONE}`, 'success');
       await sleep(500);
 
-      // 3. 点击获取验证码
+      // 3. 自动勾选同意协议复选框
+      log('检查同意协议复选框...');
+      const checkedBoxes = checkAgreementBoxes();
+      if (checkedBoxes.length > 0) {
+        log(`已勾选 ${checkedBoxes.length} 个协议复选框: ${checkedBoxes.join(', ')}`, 'success');
+        await sleep(500);
+      } else {
+        log('未发现需要勾选的协议复选框');
+      }
+
+      // 4. 点击获取验证码
       log('查找获取验证码按钮...');
       const codeBtn = findCodeButton();
       if (!codeBtn) throw new Error('未找到获取验证码按钮');
@@ -336,12 +346,22 @@
       log('已点击获取验证码', 'success');
       await sleep(1000);
 
-      // 4. 轮询等待验证码
+      // 4.5 检测验证码
+      const hasCaptcha = detectCaptcha();
+      if (hasCaptcha) {
+        log('检测到验证码，请手动完成验证', 'error');
+        setInfo('请手动完成验证码...');
+        await waitForCaptchaComplete();
+        log('验证码已完成', 'success');
+        await sleep(1000);
+      }
+
+      // 5. 轮询等待验证码
       log('等待手机端同步验证码...');
       setInfo('等待验证码中...');
       const code = await pollForCode();
 
-      // 5. 填入验证码
+      // 6. 填入验证码
       log('查找验证码输入框...');
       const codeInput = findCodeInput();
       if (!codeInput) throw new Error('未找到验证码输入框');
@@ -350,7 +370,7 @@
       log(`已填入验证码: ${code}`, 'success');
       setInfo('验证码已填入!');
 
-      // 6. 尝试自动提交
+      // 7. 尝试自动提交
       await sleep(500);
       const submitBtn = findSubmitButton();
       if (submitBtn) {
@@ -460,6 +480,133 @@
       }
     }
     return null;
+  }
+
+  // ========== 自动勾选同意协议复选框 ==========
+  function checkAgreementBoxes() {
+    const checked = [];
+    const keywords = ['同意', '已阅读', '已阅读并同意', '隐私政策', '用户协议', '服务条款', 'agree', 'privacy'];
+
+    // 策略1: 查找所有包含关键词的文本，然后找附近的 checkbox
+    const allElements = document.querySelectorAll('span, div, label, p');
+    for (const el of allElements) {
+      const text = el.textContent || '';
+      const hasKeyword = keywords.some(k => text.includes(k));
+
+      if (hasKeyword && text.length < 100) {
+        // 找到包含关键词的元素，向上查找复选框
+        const parent = el.closest('[class*="agree"], [class*="clause"], [class*="Clause"]');
+        const searchArea = parent || el.parentElement;
+
+        if (searchArea) {
+          // 查找 input[type="checkbox"]
+          const cb = searchArea.querySelector('input[type="checkbox"]');
+          if (cb && !cb.checked) {
+            // 尝试多种点击方式
+            cb.click();
+            cb.checked = true;
+            cb.dispatchEvent(new Event('change', { bubbles: true }));
+            cb.dispatchEvent(new Event('input', { bubbles: true }));
+
+            // 点击父容器中的可点击元素
+            const clickable = searchArea.querySelector('.phoenix-checkbox__box, .phoenix-checkbox__realInput, [class*="box"]');
+            if (clickable) {
+              clickable.click();
+            }
+
+            checked.push(text.trim().substring(0, 30));
+            continue;
+          }
+        }
+      }
+    }
+
+    // 策略2: 直接查找 phoenix-checkbox 组件
+    const phoenixCheckboxes = document.querySelectorAll('.phoenix-checkbox');
+    for (const container of phoenixCheckboxes) {
+      const parentText = container.closest('[class*="agree"], [class*="clause"], [class*="Clause"]')?.textContent || '';
+      const fullText = parentText || container.parentElement?.textContent || '';
+      const hasKeyword = keywords.some(k => fullText.includes(k));
+
+      if (hasKeyword) {
+        const cb = container.querySelector('input[type="checkbox"]');
+        if (cb && !cb.checked) {
+          // 点击 realInput 或 box
+          const realInput = container.querySelector('.phoenix-checkbox__realInput');
+          const box = container.querySelector('.phoenix-checkbox__box');
+
+          if (realInput) realInput.click();
+          if (box) box.click();
+          if (cb) {
+            cb.click();
+            cb.checked = true;
+            cb.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+
+          checked.push(fullText.trim().substring(0, 30));
+        }
+      }
+    }
+
+    // 策略3: 查找所有未勾选的 checkbox，检查周围文本
+    const allCheckboxes = document.querySelectorAll('input[type="checkbox"]:not(:checked)');
+    for (const cb of allCheckboxes) {
+      const parent = cb.closest('div, label, span');
+      if (!parent) continue;
+
+      // 向上查找包含文本的容器
+      let textContainer = parent;
+      for (let i = 0; i < 5; i++) {
+        if (!textContainer.parentElement) break;
+        textContainer = textContainer.parentElement;
+        const text = textContainer.textContent || '';
+        if (keywords.some(k => text.includes(k))) {
+          cb.click();
+          cb.checked = true;
+          cb.dispatchEvent(new Event('change', { bubbles: true }));
+          checked.push(text.trim().substring(0, 30));
+          break;
+        }
+      }
+    }
+
+    return checked;
+  }
+
+  // ========== 验证码处理 ==========
+  function detectCaptcha() {
+    const selectors = [
+      '.geetest_panel_box',
+      '.geetest_panel',
+      '[class*="captcha"]',
+      '[class*="Captcha"]',
+      '[class*="verify"]',
+      '.slide-verify',
+      '#captcha',
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el && el.offsetParent !== null) return true;
+    }
+    return false;
+  }
+
+  function waitForCaptchaComplete() {
+    return new Promise((resolve) => {
+      const check = setInterval(() => {
+        const hasCaptcha = detectCaptcha();
+        if (!hasCaptcha) {
+          clearInterval(check);
+          resolve();
+        }
+      }, 1000);
+
+      // 5分钟超时
+      setTimeout(() => {
+        clearInterval(check);
+        resolve();
+      }, 300000);
+    });
   }
 
   async function pollForCode() {
