@@ -1,6 +1,9 @@
 package com.smsync;
 
 import android.Manifest;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.database.ContentObserver;
@@ -68,6 +71,22 @@ public class MainActivity extends AppCompatActivity {
 
         btnConnect.setOnClickListener(v -> connect());
         btnDisconnect.setOnClickListener(v -> disconnect());
+
+        // 复制日志按钮
+        Button btnCopyLog = findViewById(R.id.btn_copy_log);
+        btnCopyLog.setOnClickListener(v -> copyLog());
+    }
+
+    private void copyLog() {
+        StringBuilder sb = new StringBuilder();
+        for (String line : logEntries) {
+            sb.append(line).append("\n");
+        }
+
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        ClipData clip = ClipData.newPlainText("SMS同步日志", sb.toString());
+        clipboard.setPrimaryClip(clip);
+        Toast.makeText(this, "日志已复制到剪贴板", Toast.LENGTH_SHORT).show();
     }
 
     private void loadSavedIp() {
@@ -153,7 +172,8 @@ public class MainActivity extends AppCompatActivity {
             public void onChange(boolean selfChange, Uri uri) {
                 super.onChange(selfChange, uri);
                 addLog("短信数据库变化: " + uri);
-                readLatestSms();
+                // 延迟 500ms 等待短信完全写入
+                mainHandler.postDelayed(() -> readLatestSms(), 500);
             }
         };
 
@@ -190,13 +210,13 @@ public class MainActivity extends AppCompatActivity {
         try {
             addLog("查询短信, 时间戳: " + lastSmsTimestamp);
 
-            // 先查询所有短信，不限制时间
+            // 按 _id DESC 排序，查询最新的短信
             Cursor cursor = getContentResolver().query(
                     Uri.parse("content://sms/inbox"),
                     new String[]{"_id", "address", "body", "date", "read"},
-                    null,
-                    null,
-                    "date DESC"
+                    "date > ?",
+                    new String[]{String.valueOf(lastSmsTimestamp)},
+                    "_id DESC"
             );
 
             if (cursor != null) {
