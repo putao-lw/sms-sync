@@ -1,5 +1,7 @@
 const express = require('express');
 const http = require('http');
+const path = require('path');
+const fs = require('fs');
 const { WebSocketServer } = require('ws');
 
 const HTTP_PORT = 3456;
@@ -62,6 +64,32 @@ app.post('/api/reset', (req, res) => {
   latestCode = null;
   console.log('[HTTP] 验证码已清空');
   res.json({ ok: true, message: '已清空' });
+});
+
+// 获取个人配置文件
+app.get('/profile.json', (req, res) => {
+  const profilePath = path.join(__dirname, '..', 'autofill-profile.json');
+  try {
+    if (fs.existsSync(profilePath)) {
+      const data = fs.readFileSync(profilePath, 'utf8');
+      res.json(JSON.parse(data));
+    } else {
+      res.status(404).json({ ok: false, error: '配置文件不存在' });
+    }
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 保存个人配置文件
+app.post('/profile.json', (req, res) => {
+  const profilePath = path.join(__dirname, '..', 'autofill-profile.json');
+  try {
+    fs.writeFileSync(profilePath, JSON.stringify(req.body, null, 2), 'utf8');
+    res.json({ ok: true, message: '配置已保存' });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 const httpServer = http.createServer(app);
