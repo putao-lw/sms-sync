@@ -200,6 +200,7 @@
       </div>
 
       <button class="btn btn-secondary" id="saf-preview">查看已保存数据</button>
+      <button class="btn btn-secondary" id="saf-scan">扫描页面字段</button>
       <button class="btn btn-danger" id="saf-clear-all">清空所有数据（重置）</button>
 
       <div class="data-preview" id="saf-data-preview"></div>
@@ -217,6 +218,7 @@
     });
     document.getElementById('saf-file-input').addEventListener('change', importData);
     document.getElementById('saf-preview').addEventListener('click', togglePreview);
+    document.getElementById('saf-scan').addEventListener('click', scanPageFields);
     document.getElementById('saf-clear-all').addEventListener('click', clearAllData);
 
     makeDraggable(panel);
@@ -264,17 +266,19 @@
   // 生成字段唯一标识
   function getFieldKey(input) {
     let key = null;
+    let debugInfo = { name: input.name, id: input.id, placeholder: input.placeholder, type: input.type };
 
     // 优先使用 name 属性
     if (input.name && input.name.length > 0) {
       key = `name:${input.name}`;
     }
-    // 使用 id 属性
-    else if (input.id && input.id.length > 0 && !input.id.startsWith('el-')) {
+    // 使用 id 属性（排除自动生成的 id）
+    else if (input.id && input.id.length > 0 && !input.id.startsWith('el-') && !input.id.startsWith('phoenix-')) {
       key = `id:${input.id}`;
     }
-    // 使用 placeholder
-    else if (input.placeholder && input.placeholder.length > 0 && input.placeholder !== '请输入') {
+    // 使用 placeholder（排除通用占位符）
+    else if (input.placeholder && input.placeholder.length > 0 &&
+             !['请输入', '请选择', '请选择日期', '请选择时间'].includes(input.placeholder)) {
       key = `placeholder:${input.placeholder}`;
     }
     // 使用相邻的 label 文本
@@ -295,7 +299,7 @@
     }
 
     if (DEBUG) {
-      console.log('[SmartAutofill] getFieldKey:', key, input);
+      console.log('[SmartAutofill] getFieldKey:', key, debugInfo, input);
     }
 
     return key;
@@ -319,14 +323,48 @@
       if (text && text.length < 30) return text;
     }
 
-    // 北森/Phoenix 特殊处理
-    const phoenixItem = input.closest('.phoenix-form-item, .ant-form-item, [class*="form-item"]');
+    // 北森/Phoenix 特殊处理 - 改进版
+    // 找到直接包裹 input 的 form-item（使用逐步上溯找最近的）
+    const phoenixItem = findDirectFormItem(input);
     if (phoenixItem) {
-      const labelEl = phoenixItem.querySelector('.phoenix-form-item__label, .ant-form-item-label, label');
+      const labelEl = phoenixItem.querySelector(
+        '.phoenix-form-item__label, .ant-form-item-label, .form-item-label, .form-label'
+      );
       if (labelEl) {
         const text = labelEl.textContent.trim().replace(/[:：]/g, '');
-        if (text && text.length < 20) return text;
+        if (text && text.length >= 2 && text.length < 20) {
+          const cleanText = text.replace(/^\*\s*/, '').trim();
+          if (cleanText.length >= 2 && !isCommonValue(cleanText)) {
+            return cleanText;
+          }
+        }
       }
+
+      // 尝试查找 aria-label 属性
+      const ariaLabel = phoenixItem.getAttribute('aria-label');
+      if (ariaLabel && ariaLabel.length < 20 && !isCommonValue(ariaLabel)) {
+        return ariaLabel;
+      }
+
+      // 查找最近的 <label> 或带 label 类的同级元素（排除子元素中的值文本）
+      const allLabels = phoenixItem.querySelectorAll('label, [class*="label"]');
+      for (const lbl of allLabels) {
+        // 确保 label 不是 input 的子容器（排除 select 内部的 label）
+        if (lbl.contains(input)) continue;
+        const text = lbl.textContent.trim().replace(/[:：*]/g, '');
+        if (text && text.length >= 2 && text.length < 20 && !isCommonValue(text)) {
+          const cleanText = text.replace(/^\*\s*/, '').trim();
+          if (cleanText.length >= 2) {
+            return cleanText;
+          }
+        }
+      }
+    }
+
+    // 尝试用 aria-label 属性直接获取
+    const directAriaLabel = input.getAttribute('aria-label');
+    if (directAriaLabel && directAriaLabel.length < 20 && !isCommonValue(directAriaLabel)) {
+      return directAriaLabel;
     }
 
     // 查找最近的包含"标签"的父元素
@@ -339,7 +377,7 @@
       for (const label of labels) {
         const text = label.textContent.trim();
         // 排除过长的文本和包含输入值的文本
-        if (text && text.length > 0 && text.length < 15 && !text.includes(input.value || '占位')) {
+        if (text && text.length > 1 && text.length < 15 && !text.includes(input.value || '占位')) {
           // 检查是否是真正的标签（通常在输入框前面）
           const rect = label.getBoundingClientRect();
           const inputRect = input.getBoundingClientRect();
@@ -355,6 +393,40 @@
     return null;
   }
 
+  // 找到直接包裹 input 的 form-item（逐步上溯，找到第一个就停）
+  function findDirectFormItem(input) {
+    let el = input.parentElement;
+    for (let i = 0; i < 6; i++) {
+      if (!el) break;
+      if (el.classList && (
+        el.classList.contains('phoenix-form-item') ||
+        el.classList.contains('ant-form-item') ||
+        el.classList.contains('form-item') ||
+        el.classList.contains('form-group')
+      )) {
+        return el;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  // 判断文本是否是常见的值文本（不是字段标签）
+  function isCommonValue(text) {
+    const commonValues = [
+      '身份证', '护照', '港澳通行证', '台湾通行证',
+      '男', '女', '是', '否',
+      '中国', '美国', '日本',
+      '请选择', '请输入',
+      '本科', '硕士', '博士',
+      '全日制', '非全日制',
+      '汉族',
+      '中共党员', '共青团员', '群众',
+      '已婚', '未婚'
+    ];
+    return commonValues.includes(text);
+  }
+
   // 监听输入事件
   function watchInputs() {
     if (state.watching) return;
@@ -363,6 +435,9 @@
     // 监听所有 input 和 textarea
     document.addEventListener('input', handleInput, true);
     document.addEventListener('change', handleChange, true);
+
+    // 监听 Phoenix/Ant Select 下拉选项点击
+    document.addEventListener('click', handleSelectClick, true);
 
     // 监听动态添加的元素
     const observer = new MutationObserver((mutations) => {
@@ -383,6 +458,82 @@
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
+  // 处理 Phoenix/Ant Select 下拉选项点击
+  function handleSelectClick(e) {
+    if (!state.enabled) return;
+
+    const option = e.target.closest(
+      '.phoenix-select-dropdown__item, .ant-select-item-option, ' +
+      '.phoenix-cascader-menu__item, li[role="option"], ' +
+      '.phoenix-select-item, [class*="select-item"], [class*="dropdown-item"]'
+    );
+    if (!option) return;
+
+    const optionText = option.textContent.trim();
+    if (!optionText) return;
+
+    // 找到这个选项对应的 select 组件
+    const selectDropdown = option.closest(
+      '.phoenix-select-dropdown, .ant-select-dropdown, ' +
+      '.phoenix-cascader-menus, [class*="select-dropdown"], [class*="dropdown-menu"]'
+    );
+    if (!selectDropdown) return;
+
+    // 通过 popup 找到对应的触发元素（select 本体）
+    // Phoenix select 的 dropdown 通常有 id 或 data 属性关联到触发元素
+    const selectEl = findRelatedSelect(selectDropdown);
+    if (!selectEl) return;
+
+    // 找到 form-item 容器
+    const formItem = findDirectFormItem(selectEl) || selectEl.closest('[class*="form-item"]');
+    if (!formItem) return;
+
+    // 找到 label
+    const labelEl = formItem.querySelector(
+      '.phoenix-form-item__label, .ant-form-item-label, .form-item-label, .form-label, label'
+    );
+    if (!labelEl) return;
+
+    const labelText = labelEl.textContent.trim().replace(/[:：*]/g, '').replace(/^\*\s*/, '').trim();
+    if (!labelText || labelText.length < 2 || isCommonValue(labelText)) return;
+
+    // 保存学习数据
+    const key = `label:${labelText}`;
+    state.data[key] = optionText;
+    saveData();
+    log(`学习(选择): ${labelText} → ${optionText}`, 'info');
+  }
+
+  // 找到 dropdown 对应的 select 触发元素
+  function findRelatedSelect(dropdown) {
+    // 方法1: 通过 aria-controls / aria-owns
+    const dropdownId = dropdown.id;
+    if (dropdownId) {
+      const trigger = document.querySelector(`[aria-controls="${dropdownId}"], [aria-owns="${dropdownId}"]`);
+      if (trigger) return trigger;
+    }
+
+    // 方法2: 找到最近的 phoenix-select 容器
+    // dropdown 通常是 body 下的 teleport，所以通过 DOM 位置无法直接找到
+    // 尝试通过全局查找有焦点的 select
+    const activeEl = document.activeElement;
+    if (activeEl && activeEl.closest('.phoenix-select, .ant-select, [class*="select"]')) {
+      return activeEl.closest('.phoenix-select, .ant-select, [class*="select"]');
+    }
+
+    // 方法3: 查找最近被点击过的 select
+    const selects = document.querySelectorAll('.phoenix-select, .ant-select, [class*="select-input"]');
+    for (const s of selects) {
+      const rect = s.getBoundingClientRect();
+      // 检查 select 是否在 dropdown 附近
+      if (Math.abs(rect.left - dropdown.offsetLeft) < 300) {
+        return s;
+      }
+    }
+
+    return null;
+  }
+
   function handleInput(e) {
     const input = e.target;
     if (!isValidInput(input)) return;
@@ -394,10 +545,31 @@
     const key = getFieldKey(input);
     const value = getInputValue(input);
 
+    if (DEBUG) {
+      console.log('[SmartAutofill] handleInput:', {
+        key: key,
+        value: value,
+        inputType: input.type,
+        inputId: input.id,
+        inputName: input.name,
+        placeholder: input.placeholder,
+        isValid: isValidInput(input),
+        hasValue: value && value.length > 0
+      });
+    }
+
     // 只学习有效值（长度大于1，且不是纯数字的身份证等特殊情况）
     if (value && value.length > 0) {
       // 检查是否是自动填充的（排除脚本自己填的值）
       if (input.classList.contains('smart-autofill-highlight')) return;
+
+      // 验证值是否合理（防止学习占位符文本）
+      if (value === '请输入' || value === '请选择' || value === '请选择日期') {
+        if (DEBUG) {
+          console.log('[SmartAutofill] 跳过占位符文本:', value);
+        }
+        return;
+      }
 
       clearTimeout(state.saveTimer);
       state.saveTimer = setTimeout(() => {
@@ -414,15 +586,19 @@
 
   function handleChange(e) {
     const input = e.target;
-    if (!isValidInput(input)) return;
+    // hidden 类型也要学习（Phoenix select 的隐藏 input）
+    if (!isValidInput(input) && input.type !== 'hidden') return;
     if (!state.enabled) return;
 
     const key = getFieldKey(input);
     const value = getInputValue(input);
 
-    if (value) {
+    if (value && value.length > 0 && value !== '请输入' && value !== '请选择') {
       state.data[key] = value;
       saveData();
+      if (DEBUG) {
+        console.log('[SmartAutofill] handleChange learned:', key, value);
+      }
     }
   }
 
@@ -432,6 +608,17 @@
     if (tag === 'input') {
       const type = el.type.toLowerCase();
       return ['text', 'tel', 'email', 'number', 'url', 'search', 'password'].includes(type);
+    }
+    return tag === 'textarea' || tag === 'select';
+  }
+
+  // 检查是否是可以学习的输入（包括 hidden 类型）
+  function isLearnableInput(el) {
+    if (!el) return false;
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'input') {
+      const type = el.type.toLowerCase();
+      return ['text', 'tel', 'email', 'number', 'url', 'search', 'hidden'].includes(type);
     }
     return tag === 'textarea' || tag === 'select';
   }
@@ -620,6 +807,36 @@
 
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // 扫描页面所有字段（调试用）
+  function scanPageFields() {
+    log('--- 扫描页面字段 ---', 'info');
+    const inputs = document.querySelectorAll('input, textarea, select');
+    let count = 0;
+
+    for (const input of inputs) {
+      if (!isValidInput(input)) continue;
+      if (input.type === 'password') continue;
+
+      const key = getFieldKey(input);
+      const value = getInputValue(input);
+      count++;
+
+      const label = findRelatedLabel(input) || '(无标签)';
+      const hasSaved = state.data[key] ? '✓' : '✗';
+
+      log(`  ${hasSaved} [${key}] ${label} = "${(value || '').substring(0, 15)}"`, value ? 'success' : '');
+    }
+
+    log(`共找到 ${count} 个可填写字段`, 'info');
+    log(`已保存 ${Object.keys(state.data).length} 个字段值`, 'info');
+    log('--- 扫描结束 ---', 'info');
+
+    // 同时输出到控制台
+    if (DEBUG) {
+      console.log('[SmartAutofill] 已保存数据:', state.data);
+    }
   }
 
   // ========== 初始化 ==========
