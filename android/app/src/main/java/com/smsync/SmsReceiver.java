@@ -28,7 +28,10 @@ public class SmsReceiver extends BroadcastReceiver {
 
     @Override
     public void onReceive(Context context, Intent intent) {
+        Log.d(TAG, "onReceive 被调用, action: " + intent.getAction());
+
         if (!"android.provider.Telephony.SMS_RECEIVED".equals(intent.getAction())) {
+            Log.d(TAG, "忽略非 SMS_RECEIVED 广播");
             return;
         }
 

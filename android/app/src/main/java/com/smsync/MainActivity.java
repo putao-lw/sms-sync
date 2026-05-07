@@ -81,8 +81,15 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void requestSmsPermission() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECEIVE_SMS)
-                != PackageManager.PERMISSION_GRANTED) {
+        boolean hasReceive = ContextCompat.checkSelfPermission(this, Manifest.permission.RECEIVE_SMS)
+                == PackageManager.PERMISSION_GRANTED;
+        boolean hasRead = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS)
+                == PackageManager.PERMISSION_GRANTED;
+
+        addLog("RECEIVE_SMS 权限: " + (hasReceive ? "已授予" : "未授予"));
+        addLog("READ_SMS 权限: " + (hasRead ? "已授予" : "未授予"));
+
+        if (!hasReceive || !hasRead) {
             ActivityCompat.requestPermissions(this,
                     new String[]{Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS},
                     SMS_PERMISSION_CODE);
@@ -103,7 +110,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void setupSmsCallback() {
+        addLog("设置短信回调...");
         SmsReceiver.setCallback((code, sender) -> {
+            addLog("回调被触发: code=" + code);
             mainHandler.post(() -> {
                 codeCount++;
                 addLog("收到短信验证码: " + code + " (来自: " + sender + ")");
@@ -117,6 +126,7 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
         });
+        addLog("短信回调已设置");
     }
 
     private void connect() {
