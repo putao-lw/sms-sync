@@ -17,7 +17,8 @@
 
   // ========== 配置 ==========
   const STORAGE_KEY = 'smart_autofill_data';
-  const SAVE_DELAY = 1000; // 输入后延迟保存（防抖）
+  const SAVE_DELAY = 500; // 输入后延迟保存（防抖）
+  const DEBUG = true; // 开启调试模式
 
   // ========== 状态 ==========
   let state = {
@@ -199,8 +200,7 @@
       </div>
 
       <button class="btn btn-secondary" id="saf-preview">查看已保存数据</button>
-      <button class="btn btn-secondary" id="saf-clear-fields">清空当前页面字段</button>
-      <button class="btn btn-danger" id="saf-clear-all">清空所有数据</button>
+      <button class="btn btn-danger" id="saf-clear-all">清空所有数据（重置）</button>
 
       <div class="data-preview" id="saf-data-preview"></div>
       <div class="log" id="saf-log"></div>
@@ -217,7 +217,6 @@
     });
     document.getElementById('saf-file-input').addEventListener('change', importData);
     document.getElementById('saf-preview').addEventListener('click', togglePreview);
-    document.getElementById('saf-clear-fields').addEventListener('click', clearCurrentPageFields);
     document.getElementById('saf-clear-all').addEventListener('click', clearAllData);
 
     makeDraggable(panel);
@@ -264,28 +263,42 @@
 
   // 生成字段唯一标识
   function getFieldKey(input) {
+    let key = null;
+
     // 优先使用 name 属性
-    if (input.name) return `name:${input.name}`;
-
+    if (input.name && input.name.length > 0) {
+      key = `name:${input.name}`;
+    }
     // 使用 id 属性
-    if (input.id) return `id:${input.id}`;
-
+    else if (input.id && input.id.length > 0 && !input.id.startsWith('el-')) {
+      key = `id:${input.id}`;
+    }
     // 使用 placeholder
-    if (input.placeholder) return `placeholder:${input.placeholder}`;
-
+    else if (input.placeholder && input.placeholder.length > 0 && input.placeholder !== '请输入') {
+      key = `placeholder:${input.placeholder}`;
+    }
     // 使用相邻的 label 文本
-    const label = findRelatedLabel(input);
-    if (label) return `label:${label}`;
+    else {
+      const label = findRelatedLabel(input);
+      if (label && label.length > 0) {
+        key = `label:${label}`;
+      }
+    }
 
-    // 使用 aria-label
-    if (input.getAttribute('aria-label')) return `aria:${input.getAttribute('aria-label')}`;
+    // 如果还是没有找到标识，使用页面+表单+索引的方式
+    if (!key) {
+      const form = input.closest('form') || input.closest('[class*="form"]');
+      const formId = form ? (form.id || form.className || 'form') : 'page';
+      const inputs = Array.from(document.querySelectorAll(input.tagName)).filter(isValidInput);
+      const index = inputs.indexOf(input);
+      key = `field:${formId}:${index}`;
+    }
 
-    // 使用 input type + 位置
-    const form = input.closest('form');
-    const inputs = form ? form.querySelectorAll(input.tagName) : document.querySelectorAll(input.tagName);
-    const index = Array.from(inputs).indexOf(input);
-    const page = window.location.pathname;
-    return `pos:${page}:${input.type}:${index}`;
+    if (DEBUG) {
+      console.log('[SmartAutofill] getFieldKey:', key, input);
+    }
+
+    return key;
   }
 
   // 查找关联的 label
@@ -293,26 +306,40 @@
     // 通过 for 属性
     if (input.id) {
       const label = document.querySelector(`label[for="${input.id}"]`);
-      if (label) return label.textContent.trim();
+      if (label) {
+        const text = label.textContent.trim();
+        if (text && text.length < 30) return text;
+      }
     }
 
     // 通过包裹的 label
     const parentLabel = input.closest('label');
     if (parentLabel) {
       const text = parentLabel.textContent.replace(input.value, '').trim();
-      if (text) return text;
+      if (text && text.length < 30) return text;
     }
 
-    // 通过相邻的文本
-    const parent = input.closest('.form-item, .ant-form-item, .el-form-item, div, tr');
-    if (parent) {
-      const labels = parent.querySelectorAll('label, .label, .form-label, span');
+    // 查找最近的包含"标签"的父元素
+    let parent = input.parentElement;
+    for (let i = 0; i < 5; i++) {
+      if (!parent) break;
+
+      // 查找同级的标签元素
+      const labels = parent.querySelectorAll('label, .label, .form-label, span, div');
       for (const label of labels) {
         const text = label.textContent.trim();
-        if (text && text.length < 20 && !label.contains(input)) {
-          return text;
+        // 排除过长的文本和包含输入值的文本
+        if (text && text.length > 0 && text.length < 15 && !text.includes(input.value || '占位')) {
+          // 检查是否是真正的标签（通常在输入框前面）
+          const rect = label.getBoundingClientRect();
+          const inputRect = input.getBoundingClientRect();
+          if (rect.top < inputRect.top + 20 && rect.left < inputRect.left + 100) {
+            return text;
+          }
         }
       }
+
+      parent = parent.parentElement;
     }
 
     return null;
@@ -351,15 +378,26 @@
     if (!isValidInput(input)) return;
     if (!state.enabled) return;
 
+    // 跳过密码字段
+    if (input.type === 'password') return;
+
     const key = getFieldKey(input);
     const value = getInputValue(input);
 
+    // 只学习有效值（长度大于1，且不是纯数字的身份证等特殊情况）
     if (value && value.length > 0) {
+      // 检查是否是自动填充的（排除脚本自己填的值）
+      if (input.classList.contains('smart-autofill-highlight')) return;
+
       clearTimeout(state.saveTimer);
       state.saveTimer = setTimeout(() => {
-        state.data[key] = value;
-        saveData();
-        log(`学习: ${key.substring(0, 30)} → ${value.substring(0, 20)}`, 'info');
+        // 再次验证值没有变化
+        const currentValue = getInputValue(input);
+        if (currentValue === value) {
+          state.data[key] = value;
+          saveData();
+          log(`学习: ${key.substring(0, 20)} → ${value.substring(0, 15)}`, 'info');
+        }
       }, SAVE_DELAY);
     }
   }
@@ -399,17 +437,23 @@
   function autoFillSingle(input) {
     if (!state.enabled) return;
     if (!isValidInput(input)) return;
-    if (input.value) return; // 已有值不覆盖
+    if (input.value && input.value.length > 0) return; // 已有值不覆盖
+    if (input.type === 'password') return; // 跳过密码字段
 
     const key = getFieldKey(input);
     const value = state.data[key];
 
-    if (value) {
+    // 验证值是否合理（防止把身份证填到所有字段）
+    if (value && value.length > 0) {
+      // 检查值是否适合这个字段类型
+      if (input.type === 'email' && !value.includes('@')) return;
+      if (input.type === 'tel' && !/^\d+$/.test(value)) return;
+
       setInputValue(input, value);
       // 添加高亮效果
       input.classList.add('smart-autofill-highlight');
       setTimeout(() => input.classList.remove('smart-autofill-highlight'), 2000);
-      log(`自动填写: ${key.substring(0, 30)}`, 'success');
+      log(`自动填写: ${key.substring(0, 20)}`, 'success');
     }
   }
 
